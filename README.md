@@ -1,12 +1,13 @@
-# 🧠 WorkBuddy Skill Semantic Router
+# 🧠 Skill Semantic Router
 
-**一套基于语义向量检索的 AI Agent Skill 智能路由框架**
-
-> 从关键词匹配到语义理解，让正确的 Skill 总能被找到。
+> **AI Agent 语义路由框架** — 基于多层语义检索的智能 Skill 路由引擎，让正确的工具总能被找到。
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Accuracy](https://img.shields.io/badge/Routing%20Accuracy-100%25-brightgreen.svg)]()
+[![Zero Dependencies](https://img.shields.io/badge/Dependencies-None-brightgreen.svg)]()
+
+**Tags**: `ai-agent` · `skill-routing` · `nlp` · `intent-classification` · `tf-idf` · `semantic-search` · `zero-dependency` · `self-learning`
 
 ---
 
@@ -94,7 +95,7 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/skill-semantic-router.git
+git clone https://github.com/zhuang-HE/skill-semantic-router.git
 cd skill-semantic-router
 ```
 
@@ -245,4 +246,4 @@ MIT License — 自由使用、修改、分发。
 
 ---
 
-*Built for WorkBuddy · 探索 AI Agent 智能调度的更优解*
+*Built with ❤️ · Exploring the better way to route AI Agent skills*
