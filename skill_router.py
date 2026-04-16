@@ -146,9 +146,28 @@ def augment_query(
 # ─── 主路由器 ─────────────────────────────────────────────────────────────────
 
 class SkillRouter:
-    def __init__(self, index_path: str = str(SKILL_INDEX_PATH)):
+    def __init__(self, index_path: str = str(SKILL_INDEX_PATH), auto_sync: bool = False):
         self.index_path = index_path  # 保存路径供 FeedbackLearner 使用
-        with open(index_path, encoding="utf-8") as f:
+        self.auto_sync = auto_sync
+
+        # 自动同步索引（可选）
+        if auto_sync:
+            self._auto_sync_index()
+
+        self._load_and_build()
+
+    def _auto_sync_index(self):
+        """自动扫描并同步索引"""
+        try:
+            from skill_index_manager import SkillIndexManager
+            mgr = SkillIndexManager(index_path=self.index_path)
+            mgr.full_sync(remove_missing=False)  # 不自动移除，避免误删
+        except Exception as e:
+            print(f"[SkillRouter] 自动同步跳过: {e}")
+
+    def _load_and_build(self):
+        """加载索引并构建 TF-IDF 向量"""
+        with open(self.index_path, encoding="utf-8") as f:
             self.index = json.load(f)
         self.skills = self.index["skills"]
         self.routing_rules = self.index.get("routing_rules", {})
@@ -156,6 +175,10 @@ class SkillRouter:
         # 构建 TF-IDF 索引
         self.idf, self.skill_vecs = build_tfidf_index(self.skills)
         print(f"[SkillRouter] 已加载 {len(self.skills)} 个 skill，索引构建完成")
+
+    def reload(self):
+        """重新加载索引（skill 变更后调用）"""
+        self._load_and_build()
 
     def _query_vec(self, query: str) -> dict:
         tokens = tokenize(query)
@@ -222,6 +245,9 @@ class SkillRouter:
         ]
         scores.sort(key=lambda x: -x[1])
 
+        # 来源优先级 boost：用户级 skill 在分数接近时优先
+        scores = self._apply_source_boost(scores)
+
         # 类别先验 boost
         scores = self._apply_category_boost(scores, augmented)
 
@@ -253,6 +279,24 @@ class SkillRouter:
             "reason": reason,
         }
 
+    # ─── 来源优先级（用户级 > 插件级）────────────────────────────────────────
+    SOURCE_BOOST = {
+        "user": 1.20,    # 用户级 skill +20%
+        "plugin": 1.00,  # 插件级 skill 不变
+    }
+
+    def _apply_source_boost(
+        self, scores: list[tuple[str, float]]
+    ) -> list[tuple[str, float]]:
+        """用户级 skill 在分数差距不大的情况下优先"""
+        boosted = []
+        for skill_id, score in scores:
+            skill = next((s for s in self.skills if s["id"] == skill_id), None)
+            source = skill.get("source", "plugin") if skill else "plugin"
+            factor = self.SOURCE_BOOST.get(source, 1.0)
+            boosted.append((skill_id, score * factor))
+        return sorted(boosted, key=lambda x: -x[1])
+
     # ─── 类别先验过滤（处理已知歧义场景）────────────────────────────────────
     CATEGORY_HINTS = {
         # 金融数据词 → 优先金融类别
@@ -269,12 +313,14 @@ class SkillRouter:
         r'\bdcf\b|折现现金流': "dcf-model",
         r'\bcim\b|投资备忘录': "cim-builder",
         r'memory\.md|记忆整理|工作记忆': "memory-consolidation",
+        r'做个\s*ppt|做\s*ppt|制作\s*ppt|ppt.*给我': "pptx",
     }
 
     # 同类别内优先级：key=类别, value=优先 skill 列表（按优先级排）
     CATEGORY_PRIORITY = {
         "金融数据": ["neodata-financial-search", "finance-data-retrieval", "stock-analyst"],
         "产品管理": ["product-management-workflows"],
+        "办公文档": ["pptx", "docx", "xlsx", "pdf"],
     }
 
     def _apply_category_boost(
@@ -291,17 +337,18 @@ class SkillRouter:
         if not boosted_categories:
             return scores
 
-        # 对命中类别的 skill 分数乘以 1.5 倍
+        # 对命中类别的 skill 分数乘以 boost 系数
+        CATEGORY_BOOST_FACTOR = 2.0
         boosted = []
         for skill_id, score in scores:
             skill = next((s for s in self.skills if s["id"] == skill_id), None)
             if skill and skill.get("category") in boosted_categories:
-                boosted.append((skill_id, score * 1.5))
+                boosted.append((skill_id, score * CATEGORY_BOOST_FACTOR))
             else:
                 boosted.append((skill_id, score))
         result = sorted(boosted, key=lambda x: -x[1])
 
-        # 类别内优先级：若 top-1 和 top-2 分数差 < 10%，用 CATEGORY_PRIORITY 决胜
+        # 类别内优先级：若 top-1 和 top-2 分数差 < 25%，用 CATEGORY_PRIORITY 决胜
         if len(result) >= 2:
             top_id, top_sc = result[0]
             sec_id, sec_sc = result[1]
@@ -311,7 +358,7 @@ class SkillRouter:
                 prio = self.CATEGORY_PRIORITY[top_cat]
                 top_rank = prio.index(top_id) if top_id in prio else 99
                 sec_rank = prio.index(sec_id) if sec_id in prio else 99
-                if sec_rank < top_rank and abs(top_sc - sec_sc) / max(top_sc, 1e-9) < 0.15:
+                if sec_rank < top_rank and abs(top_sc - sec_sc) / max(top_sc, 1e-9) < 0.25:
                     # 交换 top-1 和 top-2
                     result[0], result[1] = result[1], result[0]
 

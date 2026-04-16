@@ -28,11 +28,12 @@
 | 特性 | 说明 |
 |------|------|
 | 🚀 **零依赖运行** | 纯 Python 实现 TF-IDF 向量化，无需安装 PyTorch / transformers |
-| 🎯 **三层路由架构** | 精确匹配 → 语义检索 → 置信度决策，层层兜底 |
+| 🎯 **多层路由架构** | 精确匹配 → 语义检索 → 置信度决策，层层兜底 |
 | 🧠 **上下文感知** | 利用对话历史中的实体（股票名、公司名）增强当前 Query |
-| 📚 **类别先验 Boost** | 金融/产品等领域词命中时，对对应类别 Skill 加权 |
+| 📚 **类别先验 Boost** | 金融/产品等领域词命中时，对对应类别 Skill 加权 2x |
 | 🔄 **自学习反馈** | 用户纠错时自动提取触发词，写回索引并重建向量 |
-| 📊 **25 个 Skill 覆盖** | 涵盖代码、金融、文档、产品、数据分析等主要领域 |
+| 🔄 **动态索引管理** | 自动扫描文件系统，发现新增/变更/废弃 Skill 并同步索引 |
+| 📊 **487 个 Skill 覆盖** | 自动发现用户级 + 插件级 Skill，支持持续扩展 |
 
 ---
 
@@ -57,7 +58,7 @@
 ┌─────────────────────────────────────────────┐
 │  Layer 2: TF-IDF 语义向量检索               │
 │  bigram/trigram 中文分词 + 余弦相似度        │
-│  + 类别先验 Boost (1.5x) + 优先级排序       │
+│  + 类别 Boost (2.0x) + 来源优先级 + 排序    │
 └──────────────────┬──────────────────────────┘
                    │
                    ▼
@@ -73,20 +74,22 @@
 
 ## 📁 项目结构
 
-```
+````
 .
-├── skill_router.py       # 核心路由器实现（含测试用例）
-├── skill_index.json      # 25 个 Skill 的标准化语义索引
+├── skill_router.py          # 核心路由器实现（含测试用例）
+├── skill_index_manager.py   # 动态索引管理（扫描/同步/重建）
+├── skill_index.json         # 487 个 Skill 的语义索引
+├── index_changelog.json     # 索引变更日志（自动生成）
 ├── docs/
-│   ├── ARCHITECTURE.md   # 详细架构设计文档
-│   ├── METHODOLOGY.md    # 方法论：从关键词到语义路由的演进
-│   └── SKILL_SCHEMA.md   # skill_index.json 字段说明
+│   ├── ARCHITECTURE.md      # 详细架构设计文档
+│   ├── METHODOLOGY.md       # 方法论：从关键词到语义路由的演进
+│   └── SKILL_SCHEMA.md      # skill_index.json 字段说明
 ├── examples/
-│   └── demo.py           # 完整使用示例
+│   └── demo.py              # 完整使用示例
 ├── tests/
-│   └── test_router.py    # 单元测试
+│   └── test_router.py       # 单元测试
 └── README.md
-```
+````
 
 ---
 
@@ -148,16 +151,55 @@ msg = learner.on_correction(
 print(msg)  # "已为 [finance-data-retrieval] 添加触发词: ['利润表', '拉一下']"
 ```
 
+### 5. 动态索引管理（自动发现 & 同步）
+
+```python
+from skill_index_manager import SkillIndexManager
+
+mgr = SkillIndexManager()
+
+# 全量扫描 + 同步（新增/变更 Skill 自动入库）
+report = mgr.full_sync()
+# 扫描发现: 508 个 skill
+# 🆕 新增: 462  🔄 变更: 25  ✅ 无变化: 0
+
+# 查看统计
+stats = mgr.get_stats()
+# {"total_skills": 487, "sources": {"plugin": 462, "user": 25}, ...}
+
+# 仅预览变更（不写入）
+mgr.scan()
+report = mgr.sync()  # dry-run
+print(report.summary())
+```
+
+**Skill 生命周期管理：**
+
+```
+新 Skill 安装到 ~/.workbuddy/skills/ 或 plugins/
+    │
+    ▼
+python skill_index_manager.py --sync
+    │
+    ├── [+] 新增：自动解析 SKILL.md frontmatter，提取 name/description/triggers
+    ├── [~] 变更：检测 file_hash 变化，仅更新 hash（保留人工优化的元数据）
+    └── [-] 移除：磁盘上不存在的 Skill 从索引中清除
+    │
+    ▼
+skill_index.json 更新 → TF-IDF 索引重建 → 路由器 reload()
+```
+
 ---
 
 ## 📊 性能演进
 
-| 版本 | 机制 | 准确率 |
-|------|------|--------|
-| v0 | 关键词匹配 | 66.7% |
-| v1 | bigram/trigram 分词 | 83.3% |
-| v2 | + 类别 Boost + 优先级排序 | 91.7% |
-| v3 | + 精确词快速通道 | **100%** |
+| 版本 | 机制 | 准确率 | Skill 数量 |
+|------|------|--------|-----------|
+| v0 | 关键词匹配 | 66.7% | 25 |
+| v1 | bigram/trigram 分词 | 83.3% | 25 |
+| v2 | + 类别 Boost + 优先级排序 | 91.7% | 25 |
+| v3 | + 精确词快速通道 | 100% | 25 |
+| **v4** | **+ 动态索引管理 + 来源优先级 + 2.0x Boost** | **100%** | **487** |
 
 ---
 
@@ -232,8 +274,11 @@ TOP_K           = 3      # 返回候选数
 
 ## 🛣️ 路线图
 
+- [x] ~~动态索引管理~~ — 自动扫描 / 同步 / 变更检测
+- [x] ~~来源优先级~~ — 用户级 Skill 优先于插件级
+- [x] ~~487 个 Skill 覆盖~~ — 自动发现用户级 + 插件级 Skill
 - [ ] 接入真实 Embedding 模型（bge-m3 / text-embedding-3-small）
-- [ ] 支持 FAISS 向量数据库（百级以上 Skill）
+- [ ] 支持 FAISS 向量数据库（千级以上 Skill）
 - [ ] LLM Rerank（中等置信度二次判断）
 - [ ] 完整 ReAct 调度器（复杂多步任务）
 - [ ] Web UI 可视化路由过程
